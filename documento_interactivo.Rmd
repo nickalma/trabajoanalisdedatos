@@ -1,0 +1,1096 @@
+---
+title: Análisis de datos de Fórmula 1
+subtitle: Estudio de influencia de clasficación, variabilidad y otros factores en los resultados de las carreras.  
+output: 
+  html_document:
+    toc: TRUE
+    toc_float: FALSE
+    theme: readable
+author: Ivan Arambel y Nicolás Almárcegui
+runtime: shiny
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(matrixStats)
+library(kableExtra)
+drivers <- read_csv("datos/drivers.csv")
+circuits <- read_csv("datos/circuits.csv")
+lap_times <- read_csv("datos/lap_times.csv")
+qualifying <- read_csv("datos/qualifying.csv")
+races <- read_csv("datos/races.csv")
+results <- read_csv("datos/results.csv")
+pit_stops <- read_csv("datos/pit_stops.csv")
+driver_standings <- read_csv("datos/driver_standings.csv")
+```
+
+# 1. Introducción
+
+La Fórmula 1 es un deporte muy complejo, ya que se combinan la tecnología y la habilidad humana, es por eso también que los resultados se ven  influidos por muchos parámetros. En este trabajo de análisis de datos, mediante los datos que nos proporciona un dataset, estudiaremos temas como: la evolución de los tiempos de vuelta en clasificación, la importancia de la clasificación, consistencia de los pilotos y dos modelos predictivos de carreras. Para ello utilizaremos herramientas estadísticas en R como: coeficientes de variación, T-Test, Test ANOVA, y modelos de regresión lineal tanto simples como múltiples.
+
+## 1.1. Objetivo del trabajo
+
+El objetivo de este trabajo es tratar de dar respuestas con datos empíricos, a través de diversos análisis estadísticos, a preguntas como: ¿Es significativo la evolución de los tiempos de vuelta en clasificación? ¿Hay circuitos donde clasificar es más importantes que en otros? Si es así, ¿Qué tipo de circuito es más significativa esta relación?. Y en las carreras, ¿Son todos los pilotos igual de consistentes en sus tiempos?¿Quiénes lo son más?. Además de responder estas preguntas, queremos poder hacer predicciones sobre los resultados de las carreras así que haremos un modelo de regresión lineal simple con la posición final de carrera en función de la posición de salida, y un modelo de regresión lineal multiple con otras variables para ver que otras variables son significativas en la posición final además de la clasificación.
+
+## 1.2. Set de datos
+
+Hay muchas fuentes que proporcionan estos datos, de todas formas los datos son los mismos ya que son los que proporciona la propia entidad de Fórmula 1 durante las retransmisiones de los eventos deportivos.
+
+En concreto hemos seleccionado los datos de <http://ergast.com/mrd/> ya que proporciona los archivos con los datos en formato csv, que importamos a R con la función `read_csv()` de *readr* y resulta muy sencillo trabajar con ellos.
+
+De todo el dataset, los que hemos utilizado para este trabajo son.
+
+-   "drivers.csv": sacamos identificadores para los pilotos
+-   "circuits.csv": sacamos identificadores para los circuitos
+-   "races.csv": sacamos identificadores para las carreras
+-   "lap_times.csv": los tiempos de todas las vueltas de todas las carrera
+-   "qualifying.csv": resultados de todas las clasificaciones
+-   "results.csv": resultados de todas las carreras
+-   "pit_stops.csv": datos de las paradas en boxes
+-   "driver_standings.csv": datos de las posiciones de los pilotos en el mundial
+
+# 2. Análisis de la evolución tiempos de vuelta en clasificación
+
+## 2.1. Explicación e hipótesis
+
+La clasificación en Fórmula 1 determina la parrilla de salida para la carrera y esta se divide en tres rondas consecutivas Q1 Q2 y Q3. 
+
+En Q1 todos los pilotos compiten para  marcar el mejor tiempo y los cinco más lentos serán eliminados ocupando los últimos puestos en la parrilla de salida  (20-16). Los quince restantes pasan a Q2.
+En Q2 los quince pilotos restantes intentan mejorar sus tiempos y de nuevo los cinco últimos serán eliminados ocupando respectivamente las posiciones 15º al 11º  y los últimos diez pasarán a Q3.
+En Q3 los últimos diez pilotos compiten para conseguir la pole position (primera posición de salida) y los resultados en esta ronda determinarán los diez primeros puestos de salida.
+
+Se sabe que los equipos de Fórmula 1 utilizan distintos parámetros para cada ronda (como mapa de motor, carga de combustible, etc), es por esto que lo lógico sería ver una disminución de tiempo de vuelta según avanzan las rondas. Además de la influencia de los monoplazas también tenemos que tener en cuenta los pilotos, ya que éstos según avanzan las rondas buscarán cada vez más los límites de la pista y mejorarán sus tiempos.
+
+-   **Hipótesis nula**: los tiempos de vuelta no cambian en cada sesión
+-   **Hipótesis alternativa**: los tiempos de vuelta sí cambian en cada sesión
+
+Para estudiar nuestra hipótesis utilizaremos un test ANOVA para comparar los tiempos de vuelta de las sesiones de clasificación en una carrera, en concreto la de Monza 2023 .
+
+El análisis ANOVA evalúa si las diferencias entre las medias de los tiempos en las tres sesiones son estadísticamente significativas. Si el p-valor asociado es menor que 0.05, podemos rechazar la hipótesis nula de que las medias son iguales y concluir que existen diferencias significativas.
+
+
+## 2.2. Código
+
+A continuación se proporciona el código comentado.
+
+```{r, echo=TRUE, eval=FALSE}
+monza_23 <- qualifying[qualifying$raceId==1112,] # Se obtienen los datos de la carrera 
+
+# Función para pasar los tiempos en fomato "minutos:segundos.milisegundos" a segundos
+a_segundos <- function(vueltas){
+  vueltas_s <- c()
+  for(i in 1:length(vueltas)){
+    tiempo <- vueltas[i]
+    segundos <- as.numeric(strsplit(tiempo,":")[[1]])[2]+60
+    vueltas_s <- c(vueltas_s,segundos)
+  }
+  return(vueltas_s)
+}
+
+# Tiempos por sesión
+q1 <- monza_23$q1
+q1_s <- a_segundos(q1)
+q2 <- monza_23$q2[1:15]
+q2_s <- a_segundos(q2)
+q3 <- monza_23$q3[1:10]
+q3_s <- a_segundos((q3))
+
+tiempos <- c(q3_s,q2_s,q1_s)
+sesion <- c(rep("Q3",10),rep("Q2",15),rep("Q1",20))
+qualy <- data.frame(tiempos,sesion) # Formamos un dataframe para visualizar con mayor facilidad
+
+# Plot usando la librería ggplot2
+ggplot(qualy, aes(x = sesion, y = tiempos, fill = sesion)) +
+  geom_boxplot() +
+  labs(
+    title = "Evolución de tiempos de vuelta por sesión",
+    x = "Sesión",
+    y = "Tiempo (s)"
+  ) +
+  scale_fill_manual(values = c("#fa3737", "#5be35d", "#dd61e8")) + 
+  theme_minimal() +  
+  theme(
+    text = element_text(family = "Arial", size = 12),  
+    axis.text.x = element_text(angle = 45, hjust = 1), 
+    axis.title = element_text(size = 14, face = "bold")
+  )
+
+# Test estadístico
+summary(aov(tiempos~sesion))
+```
+
+## 2.3. Resultado
+
+Se anima al usuario probar seleccionando diferentes carreras y años y observar los resultados en el boxplot y en la tabla ANOVA. La gran mayoría son muy signitivativos (pvalue < 0.05).
+
+```{r}
+
+
+selectInput("ano2", "Año:", choices = seq(2024, 2010, -1), selected=2023)
+
+uiOutput("race_selector2")
+output$race_selector2 <- renderUI({
+  nombres <- races$name[which(races$year == input$ano2)]
+  selectInput("nombrecarrera2", "Carrera:", choices = nombres, selected="Italian Grand Prix")
+})
+
+output$analysis2 <- renderPlot({
+  raceId <- races$raceId[races$year == input$ano2 & races$name == input$nombrecarrera2]
+  
+  carrera <- qualifying[qualifying$raceId==raceId,]
+
+  a_segundos <- function(vueltas){
+    vueltas_s <- c()
+    for(i in 1:length(vueltas)){
+      tiempo <- vueltas[i]
+      segundos <- as.numeric(strsplit(tiempo,":")[[1]])[2] + 60
+      vueltas_s <- c(vueltas_s, segundos)
+    }
+    return(vueltas_s)
+  }
+
+  q1 <- carrera$q1
+  q1_s <- a_segundos(q1)
+  q2 <- carrera$q2[1:15]
+  q2_s <- a_segundos(q2)
+  q3 <- carrera$q3[1:10]
+  q3_s <- a_segundos(q3)
+
+  tiempos <- c(q3_s, q2_s, q1_s)
+  sesion <- c(rep("Q3", 10), rep("Q2", 15), rep("Q1", 20))
+  qualy <- data.frame(tiempos, sesion) 
+
+  ggplot(qualy, aes(x = sesion, y = tiempos, fill = sesion)) +
+    geom_boxplot() +
+    labs(
+      title = "Evolución de tiempos de vuelta por sesión",
+      x = "Sesión",
+      y = "Tiempo (s)"
+    ) +
+    scale_fill_manual(values = c("#FA3737", "#5BE35D", "#DD61E8")) +  # Custom colors
+    theme_minimal() +  # Cleaner theme
+    theme(
+      text = element_text(family = "Arial", size = 12),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      axis.title = element_text(size = 14, face = "bold")
+    )
+})
+
+output$anova_summary <- renderPrint({
+  raceId <- races$raceId[races$year == input$ano2 & races$name == input$nombrecarrera2]
+  
+  carrera <- qualifying[qualifying$raceId == raceId,]
+  
+  a_segundos <- function(vueltas){
+    vueltas_s <- c()
+    for(i in 1:length(vueltas)){
+      tiempo <- vueltas[i]
+      segundos <- as.numeric(strsplit(tiempo,":")[[1]])[2] + 60
+      vueltas_s <- c(vueltas_s, segundos)
+    }
+    return(vueltas_s)
+  }
+
+  q1 <- carrera$q1
+  q1_s <- a_segundos(q1)
+  q2 <- carrera$q2[1:15]
+  q2_s <- a_segundos(q2)
+  q3 <- carrera$q3[1:10]
+  q3_s <- a_segundos(q3)
+
+  tiempos <- c(q3_s, q2_s, q1_s)
+  sesion <- c(rep("Q3", 10), rep("Q2", 15), rep("Q1", 20))
+  qualy <- data.frame(tiempos, sesion) 
+
+  summary(aov(tiempos ~ sesion, data = qualy))
+})
+
+output$anova_summary <- renderPrint({
+  raceId <- races$raceId[races$year == input$ano2 & races$name == input$nombrecarrera2]
+  
+  carrera <- qualifying[qualifying$raceId == raceId,]
+  
+  a_segundos <- function(vueltas){
+    vueltas_s <- c()
+    for(i in 1:length(vueltas)){
+      tiempo <- vueltas[i]
+      segundos <- as.numeric(strsplit(tiempo,":")[[1]])[2] + 60
+      vueltas_s <- c(vueltas_s, segundos)
+    }
+    return(vueltas_s)
+  }
+
+  q1 <- carrera$q1
+  q1_s <- a_segundos(q1)
+  q2 <- carrera$q2[1:15]
+  q2_s <- a_segundos(q2)
+  q3 <- carrera$q3[1:10]
+  q3_s <- a_segundos(q3)
+
+  tiempos <- c(q3_s, q2_s, q1_s)
+  sesion <- c(rep("Q3", 10), rep("Q2", 15), rep("Q1", 20))
+  qualy <- data.frame(tiempos, sesion) 
+
+  summary(aov(tiempos ~ sesion, data = qualy))
+})
+
+plotOutput("analysis2")
+
+output$texto <- renderText({
+  "Tabla ANOVA:"
+})
+
+textOutput("texto")
+verbatimTextOutput("anova_summary")
+
+```
+
+En el gráfico podemos observar tres boxplots, correspondiendo a cada sesión (Q1,Q2,Q3), que nos proporcionan una imagen visual de como se ditribuyen los valores de los tiempos de vuelta de cada sesión.
+
+La tabla ANOVA nos proporciona el valor del estadístico y su pvalue asociado con el que aceptaremos o rechazaremos la hipótesis nula.
+
+La mayoría de resultados son muy significativos, como se puede ver en la tabla ANOVA, además de visualmente, probando diferentes carreras y años. Así que en general **rechazaremos** la hipótesis nula en favor de la hipótesis alternativa de que sí cambian los tiempos de vuelta.
+
+Sin embargo, cabe destacar que, tal vez por condiciones diversas, hay alguna carrera que no lo es (por ejemplo Monaco 2015 cuyo pvalue es 0.0821).
+
+# 3. Análisis de la importancia de la clasificación por circuitos
+
+## 3.1. Explicación e hipótesis
+
+La influencia de la parrilla de salida en el resultado final de una carrera en Fórmula 1 varía según el tipo de circuito en el que se corra. En Fórmula 1 podemos diferenciar principalmente tres tipos de circuitos (callejeros híbridos y autónomos) 
+
+**Hipótesis del impacto de la clasificación el resultado final según las características de los tipos de circuito:**
+
+-   **Callejeros:**
+Los circuitos callejeros suelen ser pistas estrechas con muchas curvas cerradas y pocas zonas de adelantamiento, es por eso que lo esperado sea que la parrilla de salida influye mucho en el resultado final por la dificultad de adelantamiento en este tipo de circuito.
+-   **Autódromos:**
+Los autónomos se caracterizan por tener curvas de alta velocidad y largas rectas que facilitan los adelantamientos reduciendo así la dependencia  del resultado final a la clasificación. Es por eso que el impacto de la clasificación en este tipo de circuitos será probablemente menor que en el de los otros dos tipos de circuitos.
+-   **Híbridos:**
+Los circuitos híbridos son una mezcla entre los circuitos callejeros y los autódromos. Este tipo de circuitos se caracterizan por tener una combinación de sectores rápidos y técnicos con algunas rectas largas. Las oportunidades de adelantamiento en este tipo de circuitos son algo mayores que las callejeras por eso se espera un impacto moderado de la clasificación en el resultado final .
+
+Mediante un análisis de datos históricos de clasificación y resultados de carrera intentaremos comprobar nuestras hipótesis. Los p-values se van a obtener mediante un modelo lineal que evalúa si las posiciones de clasificación están correlacionadas con las posiciones finales, circuito por circuito. La mediana de los p-values obtenidos por año y circuito ofrece una medida robusta para evaluar tendencias generales.
+
+
+## 3.2. Código
+
+A continuación se proporciona el código comentado.
+
+```{r, eval=FALSE, echo=TRUE}
+# Selección de circuitos
+id_circuitos <- c(1,4,3,18,6,7,9,32,13,24,70)
+nombres_circuitos <- c()
+for(i in 1:length(id_circuitos)){
+  nombre <- circuits[which(circuits$circuitId==id_circuitos[i]),]$name
+  nombres_circuitos <- c(nombres_circuitos,nombre)
+}
+anos <- as.character(2022:2012)
+
+analisis_matriz <- matrix(NA, nrow = 11, ncol = 11) # Inicializar matriz para introducir los datos
+
+# Bucle principal que realiza un modelo lineal para hallar el pvaluecon los datos de cada circuito
+for(c in 1:length(id_circuitos)){
+  for(y in seq(2022,2012,-1)){
+    temporada <- races[which(races$year==y),]
+    if(id_circuitos[c]%in%temporada$circuitId){
+      id_carrera <- temporada[which(temporada$circuitId==id_circuitos[c]),]$raceId
+      carrera <- results[results$raceId==id_carrera[1],]
+      grid <- carrera$grid
+      resultado <- 1:length(grid)
+      datos_carrera <- data.frame(grid,1:length(grid))
+      colnames(datos_carrera) <- c("grid","posicion")
+      modelo <- summary(lm(posicion~grid,data=datos_carrera))
+      pvalue <- coef(modelo)[8]
+      analisis_matriz[c,which(anos==y)] <- pvalue
+    }
+  }
+}
+
+# Formar un dataframe
+analisis <- data.frame(analisis_matriz)
+rownames(analisis) <- nombres_circuitos
+colnames(analisis) <- anos
+
+# Obtener la media para cada circuito entre todos los años
+library(matrixStats)
+medianas_pvalue <- rowMedians(analisis_matriz,na.rm=T)
+analisis$medianas <- medianas_pvalue
+
+
+# Formar dataframe para usar la formula para hacer el boxplot
+grupos <- c(rep("Híbrido",4),rep("Autódromo",5),rep("Callejero",2))
+medianas <- c(analisis$medianas[2],analisis$medianas[3],analisis$medianas[8],analisis$medianas[11],analisis$medianas[1],analisis$medianas[4],analisis$medianas[10],analisis$medianas[8],analisis$medianas[9],analisis$medianas[5],analisis$medianas[6])
+datos_circuitos <- data.frame(medianas,grupos)
+
+# Boxplot usando ggplot2
+ggplot(datos_circuitos, aes(x = grupos, y = medianas, fill = grupos)) +
+  geom_boxplot() +
+  labs(
+    title = "Importancia clasificación por tipo de circuito",
+    x = "Tipo de circuito",
+    y = "Pvalues"
+  ) +
+  scale_fill_manual(values = c("#fa3737", "#dd61e8", "#5be35d")) + 
+  theme_minimal() +
+  theme(
+    text = element_text(family = "Arial", size = 12), 
+    axis.text.x = element_text(angle = 45, hjust = 1),  
+    axis.title = element_text(size = 14, face = "bold")
+  )
+
+View(analisis)
+```
+
+## 3.3. Resultado
+
+El código nos proporciona un dataframe, el cual se muestra a continuación, con los pvalues de los tests realizados para cada uno de los circuitos y años seleccionados para ver en un año y circuito concreto como de significativa fue la clasificación para la carrera. También hay una columna extra con las medianas de los pvalues de cada circuito, ésto es para obtener un valor medio para cada circuito sin que afecten mucho los outliers.
+
+Como se ha explicado anteriormente, hemos clasificado los circuitos en tres tipos. Se muestra también un boxplot para cada tipo que muestra como de significativo es la clasificación en cada tipo de circuito.
+
+```{r results-only, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+id_circuitos <- c(1,4,3,18,6,7,9,32,13,24,70)
+nombres_circuitos <- c()
+for(i in 1:length(id_circuitos)){
+  nombre <- circuits[which(circuits$circuitId==id_circuitos[i]),]$name
+  nombres_circuitos <- c(nombres_circuitos,nombre)
+}
+anos <- as.character(2022:2012)
+
+analisis_matriz <- matrix(NA, nrow = 11, ncol = 11)
+
+for(c in 1:length(id_circuitos)){
+  for(y in seq(2022,2012,-1)){
+    temporada <- races[which(races$year==y),]
+    if(id_circuitos[c]%in%temporada$circuitId){
+      id_carrera <- temporada[which(temporada$circuitId==id_circuitos[c]),]$raceId
+      carrera <- results[results$raceId==id_carrera[1],]
+      grid <- carrera$grid
+      datos_carrera <- data.frame(grid,1:length(grid))
+      colnames(datos_carrera) <- c("grid","posicion")
+      modelo <- summary(lm(posicion~grid,data=datos_carrera))
+      pvalue <- coef(modelo)[8]
+      analisis_matriz[c,which(anos==y)] <- pvalue
+    }
+  }
+}
+
+
+
+analisis <- data.frame(analisis_matriz)
+rownames(analisis) <- nombres_circuitos
+colnames(analisis) <- anos
+
+library(matrixStats)
+medianas_pvalue <- rowMeans(analisis_matriz,na.rm=T)
+analisis$medianas <- medianas_pvalue
+
+
+grupos <- c(rep("Híbrido",4),rep("Autódromo",5),rep("Callejero",2))
+medianas <- c(analisis$medianas[2],analisis$medianas[3],analisis$medianas[8],analisis$medianas[11],analisis$medianas[1],analisis$medianas[4],analisis$medianas[10],analisis$medianas[7],analisis$medianas[9],analisis$medianas[5],analisis$medianas[6])
+datos_circuitos <- data.frame(medianas,grupos)
+
+knitr::kable(analisis) %>% kableExtra::kable_styling(font_size = 10)
+
+ggplot(datos_circuitos, aes(x = grupos, y = medianas, fill = grupos)) +
+  geom_boxplot() +
+  labs(
+    title = "Importancia clasificación por tipo de circuito",
+    x = "Tipo de circuito",
+    y = "Pvalues"
+  ) +
+  scale_fill_manual(values = c("#fa3737", "#dd61e8", "#5be35d")) + 
+  theme_minimal() +
+  theme(
+    text = element_text(family = "Arial", size = 12), 
+    axis.text.x = element_text(angle = 45, hjust = 1),  
+    axis.title = element_text(size = 14, face = "bold")
+  )
+
+```
+
+Viendo la tabla a simple vista no se pueden sacar muchas conclusiones, sin embargo cuando introducimos los datos de la tabla en el boxplot podemos ver de forma visual y simplificada en que rangos estan esos pvalues de la tabla en función del tipo de circuito.
+
+Cómo se puede apreciar los resultados para cada tipo de circuito son distintos, y tienen mucha lógica. Los circuitos callejeros son popularmente conocidos como los que más importante es la clasificación, ya que es más difídil conseguir ganar (y perder) posiciones en pista, mientras que es mucho más sencillo que tu posicion sea distinta al acabar la carrera en un circuito tipo autódromo ya que hay mucha más acción en pista. Los circuitos híbridos (pequeños autódromos) son una mezcla de los dos anteriores. El análisis ha sido un éxito ya que los datos lo corroboran todo esto que se cree popularmente. 
+
+**Consideraciones**: La naturaleza de cada circuito, combinada con estrategias de equipo y condiciones climáticas, puede influir en los resultados. Por ejemplo, en circuitos autódromos con lluvias, la importancia de la clasificación puede aumentar.
+
+# 4. Análisis de la consistencia de los pilotos
+
+## 4.1. Explicación e hipótesis
+
+La consistencia de un piloto en una carrera de Fórmula 1 se puede estudiar mediante la variabilidad de sus tiempos de vuelta. Es por eso que en nuestro análisis usaremos la varianza y el coeficiente de variación.
+Mediante la varianza y el coeficiente variación conseguiremos concluir en una determinada carrera que piloto ha conseguido tener una menor dispersión en los tiempos de vuelta y por consecuencia una mayor consistencia. Cuanto menor sean los valores de varianza y coeficiente variación de un piloto más consistente habrá sido durante la carrera.
+
+
+## 4.2. Código
+
+A continuación se proporciona el código comentado.
+
+```{r, echo=TRUE, eval=FALSE}
+carrera <- lap_times[lap_times$raceId==1139,] # Datos de la carrera seleccionada
+
+drivers_id <- unique(carrera$driverId) # Identificadores de los pilotos de esa carrera
+
+# Inicialización de las variables
+varianzas <- c()
+coefs <- c()
+pilotos <- c()
+# Bucle para cada piloto
+for(i in 1:length(drivers_id)){
+  vueltas <- carrera[carrera$driverId==drivers_id[i],] # Vueltas de cada piloto
+  tiempos <- vueltas$milliseconds/1000 # Vueltas en segundos
+  tiempos <- tiempos[-c(1:5)] # Se eliminan ciertas vueltas (explicado abajo)
+
+  varianza <- var(tiempos)
+  varianzas <- c(varianzas,varianza)
+  
+  media <- mean(tiempos)
+  coef <- sqrt(varianza)/media*100
+  coefs <- c(coefs,coef)
+  
+  piloto <- drivers[drivers$driverId==drivers_id[i],]$code
+  pilotos <- c(pilotos,piloto)
+}
+
+analisis <- data.frame(pilotos,coefs,varianzas)
+analisis_ordenado <- analisis[order(analisis$coefs),]
+analisis_ordenado$pilotos <- factor(analisis_ordenado$pilotos, levels = analisis_ordenado$pilotos[order(analisis_ordenado$coefs)])
+  
+  ggplot(analisis_ordenado, aes(x = pilotos, y = coefs, fill = coefs)) +
+  geom_bar(stat = "identity") +
+  scale_fill_gradient(low = "green", high = "red") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + # Rotate x-axis labels
+  labs(title = "Coeficientes de variación en los tiempos de vuelta por piloto", x = "Pilotos", y = "Coeficientes de variación")
+})
+
+```
+
+**Consideraciones**: Al seleccionar las vueltas de cada piloto hemos eliminado las 5 primeras vueltas. Esto se debe a que alrededor de las 5 primeras vueltas de las carreras son vueltas lentas para todos los pilotos, y generan outliers. No sería necesario hacer esto, ya que son vueltas lentas para todos los pilotos, sin embargo hacer esto proporciona valores de los coeficientes más coherentes y que son más fáciles aplicarles un sentido real.
+
+## 4.3. Resultado
+
+Se anima al usuario a probar distintas carreras y años y ver cómo cambia el gráfico de barras de a continuación.
+
+```{r, echo=FALSE}
+selectInput("ano3", "Año:", choices = seq(2024, 2010, -1),selected=2022)
+
+uiOutput("race_selector3")
+output$race_selector3 <- renderUI({
+  nombres <- races$name[which(races$year == input$ano3)]
+  selectInput("nombrecarrera3", "Carrera:", choices = nombres, selected="Spanish Grand Prix")
+})
+
+output$analysis3 <- renderPlot({
+  raceId <- races$raceId[races$year == input$ano3 & races$name == input$nombrecarrera3]
+  
+  carrera <- lap_times[lap_times$raceId == raceId, ]
+  drivers_id <- unique(carrera$driverId)
+  
+  varianzas <- c()
+  coefs <- c()
+  pilotos <- c()
+  for (i in 1:length(drivers_id)) {
+    vueltas <- carrera[carrera$driverId == drivers_id[i], ]
+    tiempos <- vueltas$milliseconds / 1000
+    tiempos <- tiempos[-c(1:5)]
+
+    varianza <- var(tiempos)
+    varianzas <- c(varianzas, varianza)
+    media <- mean(tiempos)
+    coef <- sqrt(varianza) / media * 100
+    coefs <- c(coefs, coef)
+    
+    piloto <- drivers[drivers$driverId == drivers_id[i], ]$code
+    pilotos <- c(pilotos, piloto)
+  }
+  
+  analisis <- data.frame(pilotos, coefs, varianzas)
+  analisis_ordenado <- analisis[order(analisis$coefs), ]
+  
+  analisis_ordenado$pilotos <- factor(analisis_ordenado$pilotos, levels = analisis_ordenado$pilotos[order(analisis_ordenado$coefs)])
+  
+  ggplot(analisis_ordenado, aes(x = pilotos, y = coefs, fill = coefs)) +
+  geom_bar(stat = "identity") +
+  scale_fill_gradient(low = "green", high = "red") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + # Rotate x-axis labels
+  labs(title = "Coeficientes de variación en los tiempos de vuelta por piloto", x = "Pilotos", y = "Coeficientes de variación")
+})
+
+plotOutput("analysis3")
+
+```
+
+Hemos utilizado un gráfico de barras para visualizar los resultados, éste muestra de menor a mayor los coeficientes de variación de los pilotos para la carrera seleccionadoa Los coeficientes pueden variar mucho en función de las condiciones de carrera, con la aparición de banderas amarillas, coche de seguridad, lluvia... Por ésta razones no se deben comparar éstos datos entre carreras distintas. Pero sí que proporciona resultados interesantes comparar los coeficientes de los pilotos en la misma carrera, con éstos resultados podemos saber que pilotos han tenido un mejor rendimiento.
+
+# 5. Modelo de carrera simple
+
+## 5.1. Explicación e hipótesis
+
+Puede ser muy interesante establecer una relación entre la posición de salida y la posición final de una carrera de Fórmula 1, ya que mediante esa relación se podrían realizar distintas predicciones sobre el resultado de las diferentes carreras.
+
+Para ello hemos creado un modelo lineal para evaluar cómo la posición inicial de un piloto influye en su resultado final y con la ayuda de los datos históricos intentaremos predecir resultados futuros, aunque  esta predicción no será perfecta debido a  distintos factores como pueden ser los accidentes, la meteorología o las diferentes estrategias que haya escogido cada equipo.
+
+La hipótesis plantea que existe una relación lineal entre la posición de salida (variable independiente) y la posición final (variable dependiente), es decir, que los pilotos que empiezan en los primeros puestos tienen mayores probabilidades de terminar en una buena posición.
+
+
+## 5.2. Código
+
+A continuación se proporciona el código comentado.
+
+```{r, eval=FALSE, echo=TRUE}
+library(ggplot2)
+
+# Se recogen los datos posición de salida (grid) y final de carrera (position) de el circuito seleccionado (en este caso Spa-Francorchamps)
+circuito <- races[races$year<2023&races$year>2011&races$circuitId==13,]
+races_id <- circuito$raceId
+datos_circuito <- results[results$raceId%in%races_id,]
+datos <- datos_circuito[c(6,7)]
+datos <- datos[-which(datos$position=="\\N"),]
+datos <- datos[-which(datos$grid==0),]
+
+datos$grid <- as.numeric(datos$grid)
+datos$position <- as.numeric(datos$position)
+
+# Crear el modelo
+modelo <- lm(position ~ grid, data = datos)
+predicciones <- predict(modelo, newdata = data.frame(grid = datos$grid), interval = "prediction", level = 0.9)
+
+# Predicciones (se añaden a datos por simplicidad)
+datos$fit <- predicciones[, "fit"]
+datos$lwr <- predicciones[, "lwr"]
+datos$upr <- predicciones[, "upr"]
+
+# Gráfico con ggplot2
+ggplot(datos, aes(x = grid, y = position)) +
+  geom_point(color = "blue", size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, color = "red", size = 1.2) + 
+  geom_ribbon(aes(ymin = lwr, ymax = upr), fill = "red", alpha = 0.2) + 
+  scale_y_reverse(breaks = seq(min(datos$position), max(datos$position), by = 1)) + 
+  scale_x_continuous(breaks = seq(min(datos$grid), max(datos$grid), by = 1)) +
+  labs(
+    title = "Modelo de predicción de carrera para Spa (Bélgica)",
+    x = "Posición de salida",
+    y = "Posición final carrera",
+    caption = paste(
+      "R² del modelo:", round(summary(modelo)$r.squared, 3),
+      "| Pendiente (beta):", round(coef(modelo)["grid"], 3),
+      "| P-value:", coef(summary(modelo))[8]
+    )
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+## 5.3. Resultado
+
+Se anima al usuario a probar entre los tres circuitos distintos para observar detalladamente los cambios que, aunque son ligeros, son importantes y significativos.
+
+```{r, echo=FALSE}
+
+selectInput("circuito_modelo", "Circuito:", choices = c("Spa (Autódromo)","Canada (Híbrido)","Monaco (Callejero)"),selected="Spa (Autódromo)")
+
+output$analysis5 <- renderPlot({
+  
+    if(input$circuito_modelo=="Spa (Autódromo)"){
+    id <- 13
+  } else if(input$circuito_modelo=="Canada (Híbrido)"){
+    id <- 7
+  } else if(input$circuito_modelo=="Monaco (Callejero)"){
+    id <- 6
+  }
+  
+circuito <- races[races$year<2023&races$year>2011&races$circuitId==id,]
+races_id <- circuito$raceId
+datos_circuito <- results[results$raceId%in%races_id,]
+datos <- datos_circuito[c(6,7)]
+datos <- datos[-which(datos$position=="\\N"),]
+datos <- datos[-which(datos$grid==0),]
+
+datos$grid <- as.numeric(datos$grid)
+datos$position <- as.numeric(datos$position)
+
+# Crear el modelo
+modelo <- lm(position ~ grid, data = datos)
+predicciones <- predict(modelo, newdata = data.frame(grid = datos$grid), interval = "prediction", level = 0.9)
+
+# Predicciones (se añaden a datos por simplicidad)
+datos$fit <- predicciones[, "fit"]
+datos$lwr <- predicciones[, "lwr"]
+datos$upr <- predicciones[, "upr"]
+
+# Gráfico con ggplot2
+ggplot(datos, aes(x = grid, y = position)) +
+  geom_point(color = "blue", size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, color = "red", size = 1.2) + 
+  geom_ribbon(aes(ymin = lwr, ymax = upr), fill = "red", alpha = 0.2) + 
+  scale_y_reverse(breaks = seq(min(datos$position), max(datos$position), by = 1)) + 
+  scale_x_continuous(breaks = seq(min(datos$grid), max(datos$grid), by = 1)) +
+  labs(
+    title = "Modelo de predicción de carrera",
+    x = "Posición de salida",
+    y = "Posición final carrera",
+    caption = paste(
+      "R² del modelo:", round(summary(modelo)$r.squared, 3),
+      "| Pendiente (beta):", round(coef(modelo)["grid"], 3),
+      "| P-value:", coef(summary(modelo))[8]
+    )
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+})
+
+plotOutput("analysis5")
+
+```
+
+Para ver las diferencias vamos a centrarnos en dos de los datos que nos proporciona el modelo: el coeficiente (pendiente) y la R^2^ (dispersión de los datos). Para ver los datos de forma ordenada y conjunta hacemos la siguiente tabla:
+
+```{r}
+tabla_datos_modelos <- data.frame(
+    Circuito = c("Spa","Canada","Monaco"), 
+    Tipo = c("Autódromo","Híbrido","Callejero"),
+    Beta = c(0.579,0.661,0.655),
+    R2 = c(0.485,0.593,0.669)
+)
+knitr::kable(tabla_datos_modelos)
+```
+
+Analizemos en primer lugar el coeficiente beta (pendiente). La pendiente nos señalará la relación entre las variables, cuánto mayor sea, más significativo. Se observa que Spa tiene un coeficiente menor que Canada y Monaco que tienen uno mayor más parecido, esto significa que es más significativo la relación entre la clasificación y la carrera en Canada y Monaco (circuitos híbrido y callejero) que en Spa (circuito autódromo).
+
+Analizando la R^2^ ahora. La R^2^ mide qué tan bien el modelo de regresión lineal explica la variabilidad de los datos. Si *R^2^=0* el modelo no explica nada de la variabilidad de los datos. Si *R^2^=1* el modelo explica completamente la variabilidad de los datos. Cuanto mayor sea R^2^ más fuerte será la relación lineal entre las posiciones de salida y las posiciones finales. En este caso R^2^ indica el porcentaje de las posiciones finales que puede explicarse por las posiciones de salida. En **Spa** sería tan solo el **48.5%**, en **Canada** sería aún mayor **59,3%** y en **Monaco** casi el **67%** de las posiciones finales pueden atribuirse a la posición de salida.
+
+## 5.4. Predicciones con el modelo
+
+Una vez que tenemos el modelo podemos realizar predicciones usando `predict()` y compararlas entre ellas.
+
+```{r, eval=FALSE, echo=TRUE}
+
+id_circuito <- 13
+posicion_a_predecir <- 3
+
+
+circuito <- races[races$year<2023&races$year>2011&races$circuitId==id_circuito,]
+races_id <- circuito$raceId
+datos_circuito <- results[results$raceId%in%races_id,]
+datos <- datos_circuito[c(6,7)]
+datos <- datos[-which(datos$position=="\\N"),]
+datos <- datos[-which(datos$grid==0),]
+
+datos$grid <- as.numeric(datos$grid)
+datos$position <- as.numeric(datos$position)
+
+modelo <- lm(position ~ grid, data = datos)
+
+predict(modelo, newdata=data.frame(grid=posicion_a_predecir))
+```
+
+```{r, echo=FALSE}
+selectInput("circuito_prediccion", "Circuito para predecir resultado final:", choices = c("Spa (Autódromo)","Canada (Híbrido)","Monaco (Callejero)"),selected="Monaco (Callejero)")
+
+numericInput("grid","Posición de salida para predecir resultado final:",3)
+
+output$prediccion <- renderPrint({
+  
+  if(input$circuito_prediccion=="Spa (Autódromo)"){
+    id <- 13
+  } else if(input$circuito_prediccion=="Canada (Híbrido)"){
+    id <- 7
+  } else if(input$circuito_prediccion=="Monaco (Callejero)"){
+    id <- 6
+  }
+  
+  circuito <- races[races$year<2023&races$year>2011&races$circuitId==id,]
+  races_id <- circuito$raceId
+  datos_circuito <- results[results$raceId%in%races_id,]
+  datos <- datos_circuito[c(6,7)]
+  datos <- datos[-which(datos$position=="\\N"),]
+  datos <- datos[-which(datos$grid==0),]
+  
+  datos$grid <- as.numeric(datos$grid)
+  datos$position <- as.numeric(datos$position)
+  
+  modelo <- lm(position ~ grid, data = datos)
+  
+  print(predict(modelo, newdata=data.frame(grid=input$grid)))
+  
+})
+
+verbatimTextOutput("prediccion")
+
+```
+
+Por ejemplo, ¿Cuál es la posición final esperado en Mónaco si sales tercero? 
+```{r}
+circuito <- races[races$year<2023&races$year>2011&races$circuitId==6,]
+races_id <- circuito$raceId
+datos_circuito <- results[results$raceId%in%races_id,]
+datos <- datos_circuito[c(6,7)]
+datos <- datos[-which(datos$position=="\\N"),]
+datos <- datos[-which(datos$grid==0),]
+
+datos$grid <- as.numeric(datos$grid)
+datos$position <- as.numeric(datos$position)
+
+modelo <- lm(position ~ grid, data = datos)
+
+predict(modelo, newdata=data.frame(grid=3))
+
+```
+
+¿Y en Spa?
+```{r}
+circuito <- races[races$year<2023&races$year>2011&races$circuitId==13,]
+races_id <- circuito$raceId
+datos_circuito <- results[results$raceId%in%races_id,]
+datos <- datos_circuito[c(6,7)]
+datos <- datos[-which(datos$position=="\\N"),]
+datos <- datos[-which(datos$grid==0),]
+
+datos$grid <- as.numeric(datos$grid)
+datos$position <- as.numeric(datos$position)
+
+modelo <- lm(position ~ grid, data = datos)
+
+predict(modelo, newdata=data.frame(grid=3))
+
+```
+
+Saliendo tercero, en Mónaco se espera que la posición final sea cuarto, en Spa la posición final se espera que sea casi quinto.
+
+# 6. Modelo de carrera múltiple
+
+## 6.1. Explicación e hipótesis
+Con el objetivo de intentar mejorar el modelo anterior hemos creado ahora un modelo de regresión múltiple en el que hemos añadido más variables que podrían explicar mejor la posición final. Las nuevas variables para cada piloto, además de la posición de salida son: velocidad más rápida (fastestLapSpeed), una transformación de rango en las vueltas rápidas de cada piloto, es decir, si has tenido la vuelta más rápida 1, si has tenido la décima más rápida 10 (fastestLaptimeRank), si ha habido un fallo mecánico (statudId, 0 si no, 1 si sí), el número de paradas en boxes (n_paradas), la suma del tiempo de esas paradas (tiempo_paradas) y la posición que ocupaba ese piloto en el mundial de pilotos (posiciones_mundial).
+
+## 6.2. Código
+A continuación se proporciona el código comentado para crear el modelo de regresión lineal múltiple.
+```{r, eval=FALSE, echo=TRUE}
+circuito <- races[races$year<2023&races$year>2011&races$circuitId==13,] 
+# 4(bcn), 6(monaco), 13(spa), 18(brasil) dan resultados un poco distintos interesantes 
+# Obtenemos los datos de las carreras concretas
+races_id <- circuito$raceId
+datos_circuito <- results[results$raceId%in%races_id,]
+
+# Preparamos el dataframe datos para usar la fórmula en el modelo lineal y quitamos datos que no nos interesan
+datos <- datos_circuito[c(2,3,6,7,15,17,18)] 
+datos <- datos[-which(datos$grid==0),]
+datos <- datos[-which(datos$fastestLapSpeed=="\\N"),]
+datos$position[which(datos$position=="\\N")] <- 20
+datos$statusId[which(datos$statusId%in%c(1,11:19,45,50,128,53,55,58,88,111:125,127,133,134))] <- 0 # este status indicará que el piloto no ha tenido accidente o fallo mecánico
+datos$statusId[which(datos$statusId>0)] <- 1 # este estatus indica que el piloto ha tenido un accidente o fallo mecánico
+
+datos$grid <- as.numeric(datos$grid)
+datos$fastestLapSpeed <- as.numeric(datos$fastestLapSpeed)
+datos$rank <- as.numeric(datos$rank)
+colnames(datos)[colnames(datos) == "rank"] <- "fastestLaptimeRank"
+
+datos$position <- as.numeric(datos$position)
+
+# aquí hay que coger los datos de las paradas en boxes de otro dataframe
+datos_pitstops <- pit_stops[pit_stops$raceId%in%races_id,]
+numero_paradas <- c()
+suma_tiempo_paradas <- c()
+for(i in 1:nrow(datos)){
+  id_carrera <- datos$raceId[i]
+  id_piloto <- datos$driverId[i]
+  paradas <- datos_pitstops[which(datos_pitstops$raceId==id_carrera&datos_pitstops$driverId==id_piloto),]
+  if(nrow(paradas)!=0){
+    n_paradas <- max(paradas$stop)
+    numero_paradas <- c(numero_paradas,n_paradas)
+    tiempos <- paradas$milliseconds/1000
+    suma_tiempo_paradas <- c(suma_tiempo_paradas,sum(tiempos))
+  } else if(nrow(paradas)==0){
+    numero_paradas <- c(numero_paradas,0)
+    suma_tiempo_paradas <- c(suma_tiempo_paradas,0)
+  }
+}
+datos$n_paradas <- numero_paradas
+datos$tiempo_paradas <- suma_tiempo_paradas
+
+# aquí hay que coger los datos de las posiciones en el mundial de otro dataframe
+datos_mundial <- driver_standings[driver_standings$raceId%in%races_id,]
+posiciones_mundial <- c()
+for(i in 1:nrow(datos)){
+  id_carrera <- datos$raceId[i]
+  id_piloto <- datos$driverId[i]
+  posicion_mundial <- datos_mundial[which(datos_mundial$raceId==id_carrera&datos_mundial$driverId==id_piloto),]$position
+  posiciones_mundial <- c(posiciones_mundial,posicion_mundial)
+}
+datos$posiciones_mundial <- posiciones_mundial
+
+# MODELO
+modelo <- lm(position ~ grid+fastestLapSpeed+fastestLaptimeRank+statusId+n_paradas+tiempo_paradas+posiciones_mundial, data = datos)
+summary(modelo)
+```
+
+## 6.3. Resultado
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+circuito <- races[races$year<2023&races$year>2011&races$circuitId==13,] 
+# 4(bcn), 6(monaco), 13(spa), 18(brasil) dan resultados distintos interesantes 
+# Obtenemos los datos de las carreras concretas
+races_id <- circuito$raceId
+datos_circuito <- results[results$raceId%in%races_id,]
+
+# Preparamos el dataframe datos para usar la fórmula en el modelo lineal y quitamos datos que no nos interesan
+datos <- datos_circuito[c(2,3,6,7,15,17,18)] 
+datos <- datos[-which(datos$grid==0),]
+datos <- datos[-which(datos$fastestLapSpeed=="\\N"),]
+datos$position[which(datos$position=="\\N")] <- 20
+datos$statusId[which(datos$statusId%in%c(1,11:19,45,50,128,53,55,58,88,111:125,127,133,134))] <- 0 # este status indicará que el piloto no ha tenido accidente o fallo mecánico
+datos$statusId[which(datos$statusId>0)] <- 1 # este estatus indica que el piloto ha tenido un accidente o fallo mecánico
+
+datos$grid <- as.numeric(datos$grid)
+datos$fastestLapSpeed <- as.numeric(datos$fastestLapSpeed)
+datos$rank <- as.numeric(datos$rank)
+colnames(datos)[colnames(datos) == "rank"] <- "fastestLaptimeRank"
+
+datos$position <- as.numeric(datos$position)
+
+# aquí hay que coger los datos de las paradas en boxes de otro dataframe
+datos_pitstops <- pit_stops[pit_stops$raceId%in%races_id,]
+numero_paradas <- c()
+suma_tiempo_paradas <- c()
+for(i in 1:nrow(datos)){
+  id_carrera <- datos$raceId[i]
+  id_piloto <- datos$driverId[i]
+  paradas <- datos_pitstops[which(datos_pitstops$raceId==id_carrera&datos_pitstops$driverId==id_piloto),]
+  if(nrow(paradas)!=0){
+    n_paradas <- max(paradas$stop)
+    numero_paradas <- c(numero_paradas,n_paradas)
+    tiempos <- paradas$milliseconds/1000
+    suma_tiempo_paradas <- c(suma_tiempo_paradas,sum(tiempos))
+  } else if(nrow(paradas)==0){
+    numero_paradas <- c(numero_paradas,0)
+    suma_tiempo_paradas <- c(suma_tiempo_paradas,0)
+  }
+}
+datos$n_paradas <- numero_paradas
+datos$tiempo_paradas <- suma_tiempo_paradas
+
+# aquí hay que coger los datos de las posiciones en el mundial de otro dataframe
+datos_mundial <- driver_standings[driver_standings$raceId%in%races_id,]
+posiciones_mundial <- c()
+for(i in 1:nrow(datos)){
+  id_carrera <- datos$raceId[i]
+  id_piloto <- datos$driverId[i]
+  posicion_mundial <- datos_mundial[which(datos_mundial$raceId==id_carrera&datos_mundial$driverId==id_piloto),]$position
+  posiciones_mundial <- c(posiciones_mundial,posicion_mundial)
+}
+datos$posiciones_mundial <- posiciones_mundial
+
+# MODELO
+modelo <- lm(position ~ grid+fastestLapSpeed+fastestLaptimeRank+statusId+n_paradas+tiempo_paradas+posiciones_mundial, data = datos)
+print(summary(modelo))
+```
+
+La posición inicial (grid), el estado del piloto en la carrera (statusId), el número de paradas (n_paradas) y el ranking de vuelta rápida (fastestLaptimeRank) tienen los efectos más significativos en la posición final.
+
+El estado de carrera es la variable más influyente debido a que, obviamente, tener un fallo mecánico en el coche o directamente abondar la carrera siempre asegura una mala posición. También. como hemos visto en el modelo anterior, la posición de salida es muy significativa.
+
+La velocidad de vuelta rápida (fastestLapSpeed) y el tiempo en paradas (tiempo_paradas) no tienen un efecto significativo en la posición final de la carrera.
+
+
+R^2^ (0.8083): Indica que el 80.83% de las posiciones finales se explica por las variables incluidas en el modelo, lo cual es un porcentaje muy alto. El p-value final del modelo es también muy significativo (< 2.2e-16).
+
+
+## 6.4. Predicciones con el modelo
+Añadiéndo la siguiente función para realizar predicciones con el modelo ya creado podemos realizar predicciones de la posición final 
+```{r, eval=FALSE, echo=TRUE}
+
+predecir <- function(año, circuito, piloto){
+  carrera_prediccion <- races[races$year==año&races$circuitId==circuito,]$raceId
+  datos_prediccion<- results[results$raceId==carrera_prediccion,]
+  pilotoId <- piloto
+  datos_pred<- datos_prediccion[which(datos_prediccion$driverId==pilotoId),]
+  datos_pred$statusId[which(datos_pred$statusId%in%c(1,11:19,45,50,128,53,55,58,88,111:125,127,133,134))] <- 0
+  datos_pred$statusId[which(datos_pred$statusId>0)] <- 1
+  paradas <- pit_stops[which(pit_stops$raceId==carrera_prediccion&pit_stops$driverId==pilotoId),]
+  n_paradas <- max(paradas$stop)
+  tiempos <- paradas$milliseconds/1000
+  suma_tiempo_paradas <- sum(tiempos)
+  posicion_mundial <- driver_standings[which(driver_standings$raceId==carrera_prediccion&driver_standings$driverId==pilotoId),]$position
+  
+  nuevo<- data.frame(datos_pred$grid,as.numeric(datos_pred$fastestLapSpeed),as.numeric(datos_pred$rank),datos_pred$statusId,n_paradas,suma_tiempo_paradas,posicion_mundial)
+  colnames(nuevo)<-c("grid","fastestLapSpeed","fastestLaptimeRank","statusId","n_paradas","tiempo_paradas","posiciones_mundial");
+  
+  return(predict(modelo, nuevo, interval="confidence", level = 0.95))
+}
+
+```
+
+Vamos a hacer algunas predicciones con nuestro modelo. Vamos a hacer predicciones con datos de las carreras de 2024 ya que que no las hemos usado para el modelo.
+
+```{r, echo=FALSE}
+circuito <- races[races$year<2023&races$year>2011&races$circuitId==18,] # 4(bcn), 6(monaco), 13(spa), 18(brasil) dan resultados distintos interesantes 
+races_id <- circuito$raceId
+datos_circuito <- results[results$raceId%in%races_id,]
+
+datos <- datos_circuito[c(2,3,6,7,15,17,18)]
+datos <- datos[-which(datos$grid==0),]
+datos <- datos[-which(datos$fastestLapSpeed=="\\N"),]
+datos$position[which(datos$position=="\\N")] <- 20
+datos$statusId[which(datos$statusId%in%c(1,11:19,45,50,128,53,55,58,88,111:125,127,133,134))] <- 0
+datos$statusId[which(datos$statusId>0)] <- 1
+
+datos$grid <- as.numeric(datos$grid)
+datos$fastestLapSpeed <- as.numeric(datos$fastestLapSpeed) # Aquí pasa algo porque cuando solo pones esta, no es significativo
+datos$rank <- as.numeric(datos$rank)
+colnames(datos)[colnames(datos) == "rank"] <- "fastestLaptimeRank"
+
+datos$position <- as.numeric(datos$position)
+
+
+datos_pitstops <- pit_stops[pit_stops$raceId%in%races_id,]
+numero_paradas <- c()
+suma_tiempo_paradas <- c()
+for(i in 1:nrow(datos)){
+  id_carrera <- datos$raceId[i]
+  id_piloto <- datos$driverId[i]
+  paradas <- datos_pitstops[which(datos_pitstops$raceId==id_carrera&datos_pitstops$driverId==id_piloto),]
+  if(nrow(paradas)!=0){
+    n_paradas <- max(paradas$stop)
+    numero_paradas <- c(numero_paradas,n_paradas)
+    tiempos <- paradas$milliseconds/1000
+    suma_tiempo_paradas <- c(suma_tiempo_paradas,sum(tiempos))
+  } else if(nrow(paradas)==0){
+    numero_paradas <- c(numero_paradas,0)
+    suma_tiempo_paradas <- c(suma_tiempo_paradas,0)
+  }
+}
+datos$n_paradas <- numero_paradas
+datos$tiempo_paradas <- suma_tiempo_paradas
+
+datos_mundial <- driver_standings[driver_standings$raceId%in%races_id,]
+posiciones_mundial <- c()
+for(i in 1:nrow(datos)){
+  id_carrera <- datos$raceId[i]
+  id_piloto <- datos$driverId[i]
+  posicion_mundial <- datos_mundial[which(datos_mundial$raceId==id_carrera&datos_mundial$driverId==id_piloto),]$position
+  posiciones_mundial <- c(posiciones_mundial,posicion_mundial)
+}
+datos$posiciones_mundial <- posiciones_mundial
+
+modelo <- lm(position ~ grid+fastestLapSpeed+fastestLaptimeRank+statusId+n_paradas+tiempo_paradas+posiciones_mundial, data = datos)
+
+
+# PREDICCIÓN
+
+# buen ejemplo verstappen en 2024 Spa o piastri en 2024 Barcelona or leclerc en 2024 Barcelona
+# VERSTAPPEN en brasil 2024 da un resultado increiblemente acertado
+# Russel en brasil 2024 tambien
+
+predecir <- function(año, circuito, piloto){
+  carrera_prediccion <- races[races$year==año&races$circuitId==circuito,]$raceId
+  datos_prediccion<- results[results$raceId==carrera_prediccion,]
+  pilotoId <- piloto
+  datos_pred<- datos_prediccion[which(datos_prediccion$driverId==pilotoId),]
+  datos_pred$statusId[which(datos_pred$statusId%in%c(1,11:19,45,50,128,53,55,58,88,111:125,127,133,134))] <- 0
+  datos_pred$statusId[which(datos_pred$statusId>0)] <- 1
+  paradas <- pit_stops[which(pit_stops$raceId==carrera_prediccion&pit_stops$driverId==pilotoId),]
+  n_paradas <- max(paradas$stop)
+  tiempos <- paradas$milliseconds/1000
+  suma_tiempo_paradas <- sum(tiempos)
+  posicion_mundial <- driver_standings[which(driver_standings$raceId==carrera_prediccion&driver_standings$driverId==pilotoId),]$position
+  
+  nuevo<- data.frame(datos_pred$grid,as.numeric(datos_pred$fastestLapSpeed),as.numeric(datos_pred$rank),datos_pred$statusId,n_paradas,suma_tiempo_paradas,posicion_mundial)
+  colnames(nuevo)<-c("grid","fastestLapSpeed","fastestLaptimeRank","statusId","n_paradas","tiempo_paradas","posiciones_mundial");
+  
+  return(predict(modelo, nuevo, interval="confidence", level = 0.95))
+}
+
+grid <- c()
+pos_real <- c()
+fit <- c()
+lwr <- c()
+upr <- c()
+
+# 2024 Spa Verstappen
+carrera_prediccion <- races[races$year==2024&races$circuitId==13,]$raceId
+datos_prediccion<- results[results$raceId==carrera_prediccion,]
+prediccion <- predecir(2024,13,830)
+grid <- c(grid, datos_prediccion[datos_prediccion$driverId==830,]$grid)
+pos_real <- c(pos_real, as.numeric(datos_prediccion[datos_prediccion$driverId==830,]$position))
+fit <- c(fit,prediccion[1])
+lwr <- c(lwr,prediccion[2])
+upr <- c(upr,prediccion[3])
+# 2024 Barcelona Piatri
+carrera_prediccion <- races[races$year==2024&races$circuitId==4,]$raceId
+datos_prediccion<- results[results$raceId==carrera_prediccion,]
+prediccion <- predecir(2024,4,857)
+grid <- c(grid, datos_prediccion[datos_prediccion$driverId==857,]$grid)
+pos_real <- c(pos_real, as.numeric(datos_prediccion[datos_prediccion$driverId==857,]$position))
+fit <- c(fit,prediccion[1])
+lwr <- c(lwr,prediccion[2])
+upr <- c(upr,prediccion[3])
+# 2024 Barcelona Leclerc
+carrera_prediccion <- races[races$year==2024&races$circuitId==4,]$raceId
+datos_prediccion<- results[results$raceId==carrera_prediccion,]
+prediccion <- predecir(2024,4,844)
+grid <- c(grid, datos_prediccion[datos_prediccion$driverId==844,]$grid)
+pos_real <- c(pos_real, as.numeric(datos_prediccion[datos_prediccion$driverId==844,]$position))
+fit <- c(fit,prediccion[1])
+lwr <- c(lwr,prediccion[2])
+upr <- c(upr,prediccion[3])
+# 2024 Brasil Verstappen
+carrera_prediccion <- races[races$year==2024&races$circuitId==18,]$raceId
+datos_prediccion<- results[results$raceId==carrera_prediccion,]
+prediccion <- predecir(2024,18,830)
+grid <- c(grid, datos_prediccion[datos_prediccion$driverId==830,]$grid)
+pos_real <- c(pos_real, as.numeric(datos_prediccion[datos_prediccion$driverId==830,]$position))
+fit <- c(fit,prediccion[1])
+lwr <- c(lwr,prediccion[2])
+upr <- c(upr,prediccion[3])
+# 2024 Brasil Russell
+carrera_prediccion <- races[races$year==2024&races$circuitId==18,]$raceId
+datos_prediccion<- results[results$raceId==carrera_prediccion,]
+prediccion <- predecir(2024,18,847)
+grid <- c(grid, datos_prediccion[datos_prediccion$driverId==847,]$grid)
+pos_real <- c(pos_real, as.numeric(datos_prediccion[datos_prediccion$driverId==847,]$position))
+fit <- c(fit,prediccion[1])
+lwr <- c(lwr,prediccion[2])
+upr <- c(upr,prediccion[3])
+
+año <- rep("2024",5)
+circuito <- c("Spa","Barcelona","Barcelona","Brasil","Brasil")
+piloto <- c("Verstappen","Piastri","Leclerc","Verstappen","Russell")
+
+data.frame(año,circuito,piloto,grid,pos_real,fit,lwr,upr)
+
+```
+
+# 7. Conclusiones
+
+A lo largo de este trabajo, hemos explorado diversas facetas del análisis de datos en Fórmula 1 para comprender mejor las dinámicas que influyen en el rendimiento de los pilotos y los resultados de las carreras. A continuación se resumen las conclusiones más relevantes obtenidas:
+
+**Evolución de tiempos en clasificación**
+Se confirmó que los tiempos de vuelta disminuyen significativamente en las diferentes rondas de clasificación (Q1, Q2 y Q3), como era de esperarse por la reducción de pilotos y el incremento en el esfuerzo por mejorar tiempos. La mayoría de los p-valores obtenidos fueron menores a 0.05, lo que respalda la hipótesis de diferencias significativas entre rondas. Sin embargo, en algunas carreras la falta de significancia podría atribuirse a condiciones específicas.
+
+**Impacto de la clasificación según tipo de circuito**
+Los análisis corroboraron las hipótesis sobre el impacto de la clasificación dependiendo del tipo de circuito. Los circuitos callejeros muestran una mayor dependencia de la posición de salida, dado que son más difíciles de adelantar. Por el contrario, en los autódromos, las posiciones finales son más variables, reflejando mayores oportunidades de adelantamiento. Los circuitos híbridos presentaron un impacto intermedio. El análisis boxplot visualizó claramente estas tendencias, siendo coherentes con el conocimiento previo del deporte.
+
+**Consistencia de los pilotos**
+El uso de la varianza y el coeficiente de variación para medir la consistencia de los pilotos demostró ser efectivo. Los resultados mostraron que en una misma carrera, ciertos pilotos presentan menor dispersión en los tiempos, lo que se asocia con un rendimiento más constante. Estos análisis permite identificar patrones interesantes dentro de cada evento.
+
+**Modelos predictivos de carrera**
+Los modelos lineales empleados mostraron que la posición de salida tiene una relación significativa con la posición final, especialmente en circuitos callejeros e híbridos. A su vez, factores adicionales como el estado del piloto, el número de paradas y la posición en el campeonato también tienen una influencia significativa.
+
+El modelo de regresión lineal simple muestra una relación significativa entre la posición de salida y la posición final, aunque con diferencias según el tipo de circuito. Por ejemplo, en Mónaco, la posición inicial explica hasta un 67% de la variabilidad en la posición final, en comparación con el 48.5% en Spa.
+
+El modelo múltiple, con un R^2^ de 0.8083, explicó más del 80% de la variabilidad en las posiciones finales, incorporando variables clave como las paradas en boxes y la vuelta más rápida. Esto confirma que el resultado de una carrera no solo depende de la clasificación, sino también de otros factores estratégicos y contextuales.
+
+
+**En conclusión**, el análisis ha demostrado cómo los datos históricos y las herramientas estadísticas pueden proporcionar una comprensión más profunda de los factores que influyen en los resultados de la Fórmula 1. Estos resultados no solo validan muchas creencias populares sobre el deporte, sino que también ofrecen nuevas perspectivas y modelos predictivos útiles para explorar.
